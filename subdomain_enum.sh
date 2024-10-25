@@ -1,135 +1,86 @@
+
 #!/bin/bash
 
-# Update and upgrade the system
-echo "[+] Updating system..."
-sudo apt update && sudo apt upgrade -y
+# Kali Linux Subdomain Discovery Script
+# Author: Your Name
+# Description: Comprehensive subdomain discovery using multiple tools
 
-# Ask for the domain input
-read -p "Enter the domain to gather subdomains for: " DOMAIN
+# Prompt for the domain if not provided as a command-line argument
+if [ -z "$1" ]; then
+    read -p "Please enter the main domain (e.g., example.com): " DOMAIN
+else
+    DOMAIN=$1
+fi
+
+OUTPUT_DIR="${DOMAIN}_subdomain_results"
+WORDLIST="/usr/share/wordlists/rockyou.txt"
+
 if [ -z "$DOMAIN" ]; then
-    echo "[-] No domain provided. Please run the script again and enter a domain."
+    echo "No domain provided. Exiting..."
     exit 1
 fi
 
-# Install Go if not already installed
-if ! [ -x "$(command -v go)" ]; then
-    echo "[+] Installing Golang..."
-    sudo apt install golang -y
-    export PATH=$PATH:/usr/local/go/bin
-    export GOPATH=$HOME/go
-    export PATH=$GOPATH/bin:$PATH
-    echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bashrc
-    echo "export GOPATH=$HOME/go" >> ~/.bashrc
-    echo "export PATH=$GOPATH/bin:$PATH" >> ~/.bashrc
-    source ~/.bashrc
-fi
+# Step 1: Install dependencies
+echo "[*] Installing dependencies..."
+sudo apt update
+sudo apt install -y git golang python3-pip dnsrecon gobuster feroxbuster jq
+pip3 install --upgrade waybackurls gotator mksub dsieve regulator linkfinder
 
-# Create a directory for subdomain tools
-mkdir -p ~/subdomain_tools
-cd ~/subdomain_tools
+# Install Go-based tools
+GO_BIN_PATH=$(go env GOPATH)/bin
+export PATH=$PATH:$GO_BIN_PATH
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install github.com/lc/gospider@latest
+go install github.com/OWASP/Amass/v3/...@latest
+go install github.com/tomnomnom/waybackurls@latest
+go install github.com/blechschmidt/massdns@latest
 
-# Install Subfinder
-echo "[+] Installing Subfinder..."
-GO111MODULE=on go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+# Clone and install other tools
+echo "[*] Cloning and setting up additional tools..."
+mkdir -p $OUTPUT_DIR
+cd $OUTPUT_DIR
 
-# Install Sublist3r
-echo "[+] Installing Sublist3r..."
-sudo apt install sublist3r -y
+# Step 2: Run subdomain discovery tools
+echo "[*] Running Subfinder..."
+subfinder -d $DOMAIN -o subfinder_results.txt
 
-# Install Amass
-echo "[+] Installing Amass..."
-sudo apt install amass -y
+echo "[*] Using Waybackurls..."
+echo $DOMAIN | waybackurls > waybackurls_results.txt
 
-# Install Assetfinder
-echo "[+] Installing Assetfinder..."
-go install -v github.com/tomnomnom/assetfinder@latest
+echo "[*] Using Gotator for permutations..."
+gotator -sub subfinder_results.txt -perm permutations.txt -output gotator_results.txt
 
-# Install DNSx
-echo "[+] Installing DNSx..."
-GO111MODULE=on go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+echo "[*] Using Dnsgen for additional permutations..."
+dnsgen subfinder_results.txt > dnsgen_results.txt
 
-# Install PureDNS
-echo "[+] Installing PureDNS..."
-GO111MODULE=on go install github.com/d3mondev/puredns/v2@latest
+echo "[*] Using Mksub for wordlist manipulation..."
+mksub -l $WORDLIST -d $DOMAIN -o mksub_results.txt
 
-# Install DNSRecon
-echo "[+] Installing DNSRecon..."
-sudo apt install dnsrecon -y
+echo "[*] Filtering results with Dsieve..."
+dsieve -i dnsgen_results.txt -o dsieve_results.txt
 
-# Install DNSenum
-echo "[+] Installing DNSenum..."
-sudo apt install dnsenum -y
+echo "[*] Using Regulator for refining wordlists..."
+regulator -w permutations.txt -r regulator_results.txt
 
-# Install Findomain
-echo "[+] Installing Findomain..."
-wget https://github.com/findomain/findomain/releases/latest/download/findomain-linux
-chmod +x findomain-linux
-sudo mv findomain-linux /usr/local/bin/findomain
+echo "[*] Running DNS resolution..."
+cat gotator_results.txt dnsgen_results.txt dsieve_results.txt | sort -u | massdns -r /path/to/resolvers.txt -o S -w massdns_results.txt
 
-# Install Knockpy
-echo "[+] Installing Knockpy..."
-sudo apt install python3-pip -y
-pip3 install knockpy
+# Step 3: Use additional tools for web crawling and link discovery
+echo "[*] Running Gospider for crawling..."
+gospider -s "https://$DOMAIN" -o gospider_results.txt
 
-# Install DNScan
-echo "[+] Installing DNScan..."
-git clone https://github.com/rbsec/dnscan.git
-cd dnscan
-pip3 install -r requirements.txt
-cd ..
+echo "[*] Running Linkfinder for link extraction..."
+python3 /path/to/linkfinder.py -i gospider_results.txt -o linkfinder_results.txt
 
-# Install Sudomy
-echo "[+] Installing Sudomy..."
-git clone --recursive https://github.com/screetsec/Sudomy.git
-cd Sudomy
-pip3 install -r requirements.txt
-cd ..
+# Step 4: Perform content discovery with Feroxbuster and Gobuster
+echo "[*] Running Feroxbuster..."
+feroxbuster -u "https://$DOMAIN" -w /usr/share/wordlists/dirb/common.txt -o feroxbuster_results.txt
 
-# Install Domained
-echo "[+] Installing Domained..."
-git clone https://github.com/TypeError/domained.git
-cd domained
-pip3 install -r requirements.txt
-cd ..
+echo "[*] Running Gobuster..."
+gobuster dns -d $DOMAIN -w /usr/share/wordlists/dirb/common.txt -o gobuster_results.txt
 
-# Install Gotator
-echo "[+] Installing Gotator..."
-go install github.com/Josue87/gotator@latest
+# Step 5: Final aggregation of results
+echo "[*] Aggregating results..."
+cat subfinder_results.txt waybackurls_results.txt gotator_results.txt dnsgen_results.txt mksub_results.txt massdns_results.txt gospider_results.txt linkfinder_results.txt | sort -u > final_subdomains.txt
 
-echo "[+] All tools installed successfully."
-
-# Running subdomain enumeration using installed tools
-OUTPUT_FILE="all_subdomains.txt"
-TEMP_DIR="subdomains_temp"
-mkdir -p $TEMP_DIR
-
-echo "[+] Starting subdomain enumeration for $DOMAIN..."
-
-# Run each tool and collect the results
-subfinder -d $DOMAIN -silent > $TEMP_DIR/subfinder.txt
-sublist3r -d $DOMAIN -o $TEMP_DIR/sublist3r.txt
-amass enum -passive -d $DOMAIN -o $TEMP_DIR/amass.txt
-assetfinder --subs-only $DOMAIN > $TEMP_DIR/assetfinder.txt
-knockpy $DOMAIN -o $TEMP_DIR/knockpy_output
-cat $TEMP_DIR/knockpy_output/$DOMAIN.csv | cut -d, -f1 | tail -n +2 > $TEMP_DIR/knockpy.txt
-dnsx -d $DOMAIN -silent > $TEMP_DIR/dnsx.txt
-puredns bruteforce $DOMAIN > $TEMP_DIR/puredns.txt
-dnsrecon -d $DOMAIN -t brt -o $TEMP_DIR/dnsrecon.xml
-cat $TEMP_DIR/dnsrecon.xml | grep "<hostname>" | sed -e 's/<[^>]*>//g' > $TEMP_DIR/dnsrecon.txt
-dnsenum $DOMAIN -o $TEMP_DIR/dnsenum.xml
-cat $TEMP_DIR/dnsenum.xml | grep "<hostname>" | sed -e 's/<[^>]*>//g' > $TEMP_DIR/dnsenum.txt
-findomain -t $DOMAIN -q > $TEMP_DIR/findomain.txt
-python3 dnscan/dnscan.py -d $DOMAIN -o $TEMP_DIR/dnscan.txt
-python3 Sudomy/sudomy.py -d $DOMAIN -o $TEMP_DIR/sudomy.txt
-python3 domained/domained.py $DOMAIN > $TEMP_DIR/domained.txt
-gotator -sub $TEMP_DIR/subfinder.txt -perm mutations.txt -depth 1 -numbers 10 -mindup > $TEMP_DIR/gotator.txt
-
-# Combine, sort, and deduplicate results
-echo "[+] Combining results..."
-cat $TEMP_DIR/*.txt | sort -u > $OUTPUT_FILE
-
-# Clean up temporary files
-rm -rf $TEMP_DIR
-
-echo "[+] Subdomain enumeration completed."
-echo "Results saved in $OUTPUT_FILE"
+echo "[*] Subdomain discovery completed. Results saved in final_subdomains.txt"
